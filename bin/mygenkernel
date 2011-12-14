@@ -1,0 +1,198 @@
+#!/bin/sh
+# Copyright 2005-2006 Alon Bar-Lev <alon.barlev@gmail.com>
+# Distributed under the terms of the GNU General Public License v2
+
+. /etc/mygenkernel.conf
+
+die() {
+	local msg="$1"
+
+	echo "${msg}" >&2
+	exit 1
+}
+
+#
+# parse arguments
+#
+mygen_modules=0
+menuconfig="--menuconfig"
+op="all"
+clean="--no-clean"
+no_install=0
+# Default install command
+[ -z "${mygen_emerge}" ] && export mygen_emerge="emerge"
+
+for x in $*; do
+	case "${x}" in
+		--stable)
+			mygen_kernel_fqn="${mygen_kernel}${mygen_suffix_stable}"
+			clean="--clean"
+			menuconfig=
+		;;
+		--ramdisk)
+			op="ramdisk"
+		;;
+		--clean)
+			clean="--clean"
+		;;
+		--modules)
+			mygen_modules=1
+		;;
+		--no-install)
+			no_install=1
+		;;
+		--no-menuconfig)
+			menuconfig=
+		;;
+		*)
+			echo "usage: $0 [--stable] [--ramdisk] [--modules] [--clean] [--no-install]"
+			echo "--stable        - compile stable kernel"
+			echo "--ramdisk        - compile only ramdisk requirements"
+			echo "--modules       - compile all modules not required by ramdisk"
+			echo "--clean         - perform clean before compilation"
+			echo "--no-install    - don't install result kernel"
+			exit 1
+		;;
+	esac
+done
+
+if [ -z "${mygen_kernel_fqn}" ]; then
+	mygen_kernel_fqn="${mygen_kernel}${mygen_suffix_nonestable}"
+fi
+
+export mygen_kernel_fqn
+export mygen_modules
+
+#
+# check if we have files configuration
+# for this kernel
+#
+if [ ! -d "${mygen_bootfiles}/${mygen_kernel_fqn}" ]; then
+	die "Missing files at ${mygen_bootfiles}/${mygen_kernel_fqn}"
+fi
+
+#
+# compile the kernel
+#
+export KERNEL_DIR="/usr/src/linux-${mygen_kernel}"
+mygen_kernel_config="/etc/kernels/kernel-config-${mygen_arch}-${mygen_kernel_fqn}"
+
+if [ "${mygen_kernel}`grep \"CONFIG_LOCALVERSION=\" \"${mygen_kernel_config}\" | sed -r 's/.*"(.*)".*/\1/'`" != "${mygen_kernel_fqn}" ]; then
+	die "Incorrect CONFIG_LOCALVERSION"
+fi
+
+# this required if no clean
+cp "${mygen_kernel_config}" "${KERNEL_DIR}/.config"
+
+echo Compiling kernel ${mygen_kernel_fqn}...
+
+if [ -d "${mygen_temp}" ]; then
+	rm -fr "${mygen_temp}"
+fi
+
+if [ -d /var/tmp/genkernel ]; then
+	rm -fr /var/tmp/genkernel
+fi
+
+mkdir "${mygen_temp}"
+
+if ! genkernel \
+	${menuconfig} \
+	${mygen_splash:+--splash=${mygen_splash}} \
+	${mygen_splash_res:+--splash-res=${mygen_splash_res}} \
+	${clean} \
+	"--no-install" \
+	"--kerneldir=${KERNEL_DIR}" \
+	"--kernel-config=${mygen_kernel_config}" \
+	"--callback=`dirname $0`/mygenkernel-ramdisk-presettings" \
+	"--linuxrc=${mygen_bootfiles}/${mygen_kernel_fqn}/linuxrc" \
+	"--initramfs-overlay=${mygen_temp}/initramfs" \
+	${op}; then
+	
+	die "genkernel failed!"
+fi
+
+if [ -n "${mygen_kernel_post}" ]; then
+	eval ${mygen_kernel_post}
+fi
+
+#
+# mount boot as read-write
+#
+boot_mounted=0
+if mount | grep "${mygen_boot}" > /dev/null; then
+	boot_mounted=1
+fi
+if [ "${boot_mounted}" == 0 ]; then
+	if ! mount -o rw "${mygen_boot}"; then
+		die "cannot mount boot!"
+	fi
+else
+	if ! mount -o remount,rw "${mygen_boot}"; then
+		die "cannot mount boot!"
+	fi
+fi
+
+#
+# copy kernel
+#
+if [ "${no_install}" == 0 -a "${op}" != "ramdisk" ]; then
+	touch /var/run/tuxonice-new-kernel
+	if ! cp "/var/tmp/genkernel/kernel-genkernel-${mygen_arch}-"* "${mygen_boot}/kernel-${mygen_arch}-${mygen_kernel_fqn}"; then
+		die "kernel copy failed!"
+	fi
+
+	if [ -n "${mygen_map}" ]; then
+		if ! cp "/var/tmp/genkernel/System.map-genkernel-${mygen_arch}-"* "${mygen_map}/System.map-${mygen_arch}-${mygen_kernel_fqn}"; then
+			die "map copy failed!"
+		fi
+	fi
+fi
+
+#
+# copy initramfs
+#
+if [ "${no_install}" == 0 ]; then
+	if ! cp "/var/tmp/genkernel/initramfs-"* "${mygen_boot}/initramfs-${mygen_arch}-${mygen_kernel_fqn}"; then
+		die "ramdisk copy failed!"
+	fi
+fi
+
+if [ -n "${mygen_kernel_installed}" ]; then
+	eval ${mygen_kernel_installed}
+fi
+
+mount -o remount,ro "${mygen_boot}"
+
+if [ "${boot_mounted}" == 0 ]; then
+	umount "${mygen_boot}"
+fi
+
+cp "${KERNEL_DIR}/.config" "${mygen_kernel_config}" || die "cannot copy config" # 3.0->3.0.0 issue
+
+#
+# emerge more modules
+#
+if [ "${op}" != "ramdisk" -a "${mygen_modules}" != "0" ]; then
+	if ! [ -z "${mygen_emerge_modules_s0_oneshot}" ] && ! "${mygen_emerge}" ${mygen_emerge_prm} -1 ${mygen_emerge_modules_s0_oneshot}; then
+		die "${mygen_emerge} failed s0_oneshot!"
+	fi
+	if ! [ -z "${mygen_emerge_modules_s0}" ] && ! "${mygen_emerge}" ${mygen_emerge_prm} ${mygen_emerge_modules_s0}; then
+		die "${mygen_emerge} failed s0!"
+	fi
+	if ! [ -z "${mygen_emerge_modules_s1_oneshot}" ] && ! "${mygen_emerge}" ${mygen_emerge_prm} -1 ${mygen_emerge_modules_s1_oneshot}; then
+		die "${mygen_emerge} failed s1_oneshot!"
+	fi
+	if ! [ -z "${mygen_emerge_modules_s1}" ] && ! "${mygen_emerge}" ${mygen_emerge_prm} ${mygen_emerge_modules_s1}; then
+		die "${mygen_emerge} failed s1!"
+	fi
+fi
+
+#
+# cleanup
+#
+rm -fr "${mygen_temp}"
+rm -fr /var/tmp/genkernel
+sync
+
+exit 0

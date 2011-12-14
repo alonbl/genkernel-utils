@@ -1,0 +1,61 @@
+Gentoo's genkernel is a wonderful tool that ease kernel compilation process.
+This tool can be extended in order to provide the following features: 
+
+1. Replace the default linuxrc with the one provided here, in order to support suspend2,
+   disk encryption and PKCS#11. 
+2. Add required files to initramfs in order to support suspend2, disk encryption and
+   optionally PKCS#11. 
+3. Handle remerge of kernel depended modules when a new kernel is configured. 
+4. Support two versions of the same kernel (Debug and production), in order to not lock
+   computer when invalid kernel is installed. 
+5. Don't install kernel symbol file in order to make it harder to reverse debug the bzImage. 
+
+genkernels-utils configuration
+==============================
+Setup /etc/mygenkernel.conf (Example provided).
+
+Kernel configuration
+=====================
+Kernel should be located at /etc/kernels/kernel-config-<arch>-<kernel name>
+	This is a standard genkernel configuration.
+
+linuxrc should be located at /var/lib/genkernel-utils/files/<kernel name> (Example provided).
+	This is the linuxrc that will be available in the initramfs.
+
+create-initramfs should be located at /var/lib/genkernel-utils/files/<kernel name> (Example provided).
+	This script add extra files to the initramfs.
+
+misc initramfs files may be located at /var/lib/genkernel-utils/files/<kernel name>/initramfs/%%ARCH%%
+
+Usage
+=========
+
+mygenkernel
+------------
+
+usage: mygenkernel [--prod] [--ramdisk] [--modules] [--clean] [--no-install]
+--stable        - compile stable kernel
+--ramdisk        - compile only ramdisk requirements
+--modules       - compile all modules not required by ramdisk
+--clean         - perform clean before compilation
+--no-install    - don't install result kernel
+
+This is the main interface.
+
+Build a complete kernel:
+# mygenkernel --modules
+
+Build a kernel without extra modules (ebuilds)
+# mygenkernel
+
+mygenkernel-commit
+-------------------
+
+Commit nonestable kernel into stable.
+Copy /etc/kernels/[nonestable] to /etc/kernels/[stable]
+Copy /var/lib/genkernel-utils/files/[nonestable] to /etc/lib/genkernel-utils/files/[stable]
+mygenkernel --stable --modules
+mygenkernel --no-install
+
+The last is required so that the kernel tree will always be available for nonestable tests.
+

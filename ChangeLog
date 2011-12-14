@@ -1,0 +1,116 @@
+20111115
+	- (alonbl) Cleanups.
+	- (alonbl) Release 0.43
+
+20110727
+	- (alonbl) Update for linux-3.0.
+	- (alonbl) Release 0.42
+
+20090503
+	- (alonbl) Update new-kernel hack to hibernate-script.
+	- (alonbl) Release 0.41
+
+20090325
+	- (alonbl) Update examples.
+	- (alonbl) Release 0.40
+
+20081229
+	- (alonbl) --initrd -> --ramdisk as genkernel.
+	- (alonbl) Also mygenkernel.conf was modified initrd->ramdisk.
+	- (alonbl) Release 0.39
+
+20080728
+	- (alonbl) Some configuration file update.
+	- (alonbl) Release 0.38
+
+20080518
+	- (alonbl) Added openct configuration.
+	- (alonbl) Release 0.37
+
+20071113
+	- (alonbl) Fixed create-initramfs directory creation, thanks to
+	  Dustin Surawicz.
+	- (alonbl) Release 0.36
+
+20071104
+	- (alonbl) Fixed gnupg log parameter, thanks to Matyas Tibor.
+	- (alonbl) Release 0.35
+
+20071103
+	- (alonbl) Modify suspend2->tuxonice.
+	- (alonbl) Modify examples.
+	- (alonbl) uswsusp will use fbsplash only if feature available.
+	- (alonbl) Release 0.34
+
+20070929
+	- (alonbl) Modify gensplash->splash arugments for genkernel-3.4.9.
+	- (alonbl) Release 0.33
+
+20070831
+	- (alonbl) Added support splashutils-1.5.1, no daemon is required.
+	- (alonbl) Release 0.32
+
+20070714
+	- (alonbl) Added uswsusp support.
+	- (alonbl) Release 0.31
+
+20070613
+	- (alonbl) Configuration files and linuxrc update.
+	- (alonbl) Release 0.30
+
+20070519
+	- (alonbl) Update for gnupg-2 series.
+	- (alonbl) Release 0.29
+
+20070506
+	- (alonbl) Update linuxrc to handle none legacy sysfs.
+	- (alonbl) Release 0.28
+
+20070402
+	- (alonbl) Updated examples.
+	- (alonbl) Release 0.27
+
+20070310
+	- (alonbl) Fixed callback script.
+	- (alonbl) Release 0.25
+
+20070224
+	- (alonbl) Added paludis support (Pat Double).
+	- (alonbl) Release 0.24
+
+20060923
+	- (alonbl) Added System.map support.
+	- (alonbl) Release 0.21
+
+20060913
+	- (alonbl) Fixed linuxrc issues with gpg based key.
+	- (alonbl) Release 0.19
+
+20060826
+	- (alonbl) Support of umounted boot filesystem.
+	- (alonbl) Added per loop key to linuxrc.
+	- (alonbl) Release 0.17
+
+20060507
+	- (alonbl) Removed using memory file for key in linuxrc.
+	- (alonbl) Release 0.16
+
+20060504
+	- (alonbl) Fixed linuxrc quote handling
+	- (alonbl) Release 0.15
+
+20060503
+	- (alonbl) Added --gensplash-res for genkernel (Pat Double)
+	- (alonbl) Release 0.14
+
+20060501
+	- (alonbl) Updated linuxrc file
+	- (alonbl) Release 0.13
+
+20060430
+	- (alonbl) Change debug/prod to nonestable/stable
+	- (alonbl) Update documentation
+	- (alonbl) Release 0.12
+
+20060425
+	- (alonbl) Release 0.10

@@ -1,0 +1,137 @@
+#!/bin/sh
+
+die() {
+	echo "$1" >&2
+	exit 1
+}
+
+USE_GNUPG=0
+USE_OPENCT=0
+USE_PCSCD=0
+USE_TUXONICE=0
+USE_USWSUSP=1
+USE_PKCS11=0
+USE_ASE_PKCS11=0
+USE_OPENSC_PKCS11=0
+USE_PKCS11_UTIL=0
+USE_LOOP_AES=0
+
+if [ $# != 2 ]; then
+	die "usage: $0 arch target-dir"
+fi
+
+base=$(dirname $0)
+arch="$1"
+target="$2"
+
+#
+# Create basic directory
+# structure
+#
+mkdir -p "${target}/etc"
+mkdir -p "${target}/bin"
+mkdir -p "${target}/sbin"
+mkdir -p "${target}/lib"
+mkdir -p "${target}/usr/bin"
+mkdir -p "${target}/usr/sbin"
+mkdir -p "${target}/usr/lib"
+
+#
+# Copy basic files
+#
+[ -d "${base}/initramfs/${arch}" ] && ( cp -aL "${base}/initramfs/${arch}/." "${target}" || die "overlay" )
+
+if [ "${USE_LOOP_AES}" = 1 ]; then
+	cp -aL /usr/sbin/loop-aes-losetup.static "${target}/sbin/losetup.crypt" || die "losetup"
+	cp -aL /usr/bin/aespipe "${target}/usr/bin" || die "asepipe"
+fi
+
+if [ "${USE_GNUPG}" = 1 ]; then
+	cp -aL /usr/bin/gpg "${target}/usr/bin" || die "gpg"
+	[ -e /usr/bin/gpg-agent ] && ( cp -aL /usr/bin/gpg-agent "${target}/usr/bin" || die "gpg-agent" )
+fi
+
+if [ "${USE_USWSUSP}" = 1 ]; then
+	cp -aL /usr/lib/suspend/resume "${target}/sbin" || die "resume"
+fi
+if [ "${USE_TUXONICE}" = 1 ]; then
+	[ -f /sbin/suspend2ui_fbsplash ] && ( cp -aL /sbin/suspend2ui_fbsplash "${target}/sbin" || die "tixoniceui" )
+	[ -f /sbin/suspend2ui_text ] && ( cp -aL /sbin/suspend2ui_text "${target}/sbin" || die "tixoniceui" )
+	[ -f /sbin/tuxoniceui_fbsplash ] && ( cp -aL /sbin/tuxoniceui_fbsplash "${target}/sbin" || die "tixoniceui" )
+	[ -f /sbin/tuxoniceui_text ] && ( cp -aL /sbin/tuxoniceui_text "${target}/sbin" || die "tixoniceui" )
+fi
+
+if [ "${USE_OPENCT}" = 1 ]; then
+	mkdir -p "${target}/var/run"
+	cp -aL /usr/sbin/openct-control "${target}/usr/sbin" || die "openct-control"
+	cp -aL /usr/sbin/ifdhandler "${target}/usr/sbin" || die "ifdhandler"
+fi
+
+if [ "${USE_PCSCD}" = 1 ]; then
+	cp -aL /usr/sbin/pcscd "${target}/usr/sbin" || die "pcscd"
+	cp -aL /usr/lib/readers "${target}/usr/lib" || die "readers"
+#	cp -aL /usr/lib/libpcsclite.so "${target}/usr/lib" || die "libpcsclite"
+fi
+
+if [ "${USE_PKCS11}" = 1 ]; then
+	cp -aL /usr/bin/pkcs11-data "${target}/usr/bin" || die "pkcs11-data"
+	# This is the PKCS#11 provider
+#	cp -aL /usr/lib/pkcs11/libasepkcs.so "${target}/usr/lib/pkcs11" || die "libasepkcs"
+fi
+
+if [ "${USE_PKCS11_UTIL}" = 1 ]; then
+	cp -aL /usr/bin/pkcs11-tool "${target}/usr/bin" || die "pkcs11-tool"
+	cp -aL /usr/bin/pkcs15-tool "${target}/usr/bin" || die "pkcs15-tool"
+fi
+
+if [ "${USE_OPENSC_PKCS11}" = 1 ]; then
+	mkdir -p "${target}/usr/lib/pkcs11"
+	cp -aL /usr/lib/pkcs11/opensc-pkcs11.so "${target}/usr/lib/pkcs11" || die "opensc-pkcs11"
+fi
+
+if [ "${USE_ASE_PKCS11}" = 1 ]; then
+	mkdir -p "${target}/usr/lib/pkcs11"
+	cp -aL /usr/lib/pkcs11/libasepkcs.so "${target}/usr/lib/pkcs11" || die "opensc-pkcs11"
+fi
+
+#
+# This is required so that dependencies
+# will be available... Mostly because
+# PKCS#11 requires dynamic ELF.
+# If you have a static environment this is
+# not required, but it won't do any harm...
+#
+dirty=1
+while [ "${dirty}" != "0" ]; do
+	dirty=0
+	for x in $(find "${target}"); do
+		if file ${x} | grep "ELF" > /dev/null; then
+			for l in $(readelf --dynamic "${x}"  | grep Shared | sed -r 's/.*\[(.*)\].*/\1/'); do
+				echo "Found dependency $l of $x"
+
+				found=0
+				for lib in /lib /usr/lib $(cat /etc/ld.so.conf | awk '/^[^#]/ {print $1 }'); do
+					if [ -f ${lib}/$l ]; then
+						found=1
+						if [ "${lib}" = "/lib" ]; then
+							lib_t=/lib
+						else
+							lib_t=/usr/lib
+						fi
+						if [ ! -f "${target}${lib_t}/${l}" ]; then
+							echo "+++ Copy"
+							cp -aL "${lib}/${l}" "${target}${lib_t}"
+							dirty=1
+						fi
+					fi
+				done
+
+				if [ ${found} = "0" ]; then
+					die "Cannot find lib $l of $x"
+				fi
+			done
+		fi
+	done
+done
+
+exit 0

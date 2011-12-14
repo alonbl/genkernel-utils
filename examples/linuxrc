@@ -1,0 +1,968 @@
+#!/bin/sh
+#
+# Provided under GPLv2 license.
+#
+# The following standard kernel parameters are supported:
+#	root		root device
+#	rootfstype	root filesystem type (optional, default is auto detection)
+#	ro		mount root as read only
+#	[0-9]|S		runlevel
+#
+# The following custom kernel parameters are supported:
+#       initrd_kmap=kmap[:font]
+#	       Fullpath(inside initramfs /) to kmap and font(optional).
+#	initrd_shell=N
+#		Interrupts the initramfs and drops to a shell at a specified location
+#		(0-none,1-on start,2-after setup,etc..), see the linuxrc for more locations.
+#		Special N=resuce, N=install, N=repair
+#       initrd_encmode=<mode>
+#		<empty>
+#			No encryption.
+#		loop-aes
+#			Enables loop-AES support.
+#		dm-crypt
+#			Enables DM-Crypt support.
+#	initrd_util
+#		pkcs11:application:label,label,label
+#			use PKCS#11 smartcards.
+#		gpgfile:device:fstype:file,file,file[:passphrase]
+#			use gnupg file located at device.
+#			wait for device to be available.
+#		passphrase:id,id,id			(dm-crypt)
+#			use passphrases read from the user, each
+#			id signify passphrase for a device, id
+#			may be the same.
+#		keyfile:device:fstype:file,file,file	(dm-crypt)
+#			use keyfile located at device.
+#	initrd_devices
+#		Devices for encryption setup.
+#	initrd_suspend_mode
+#		tuxonice
+#		uswsusp
+#	initrd_resume_ui
+#		auto (default)
+#		none
+#		fbsplash
+#		text
+#
+#	initrd_readers
+#		pcscd
+#			Run pcscd.
+#		openct
+#			Run openct.
+#
+#	loop-aes specific
+#       -----------------
+#	initrd_loopstart=N
+#		The first loop index (/dev/loopN)
+#
+#	dm-crypt specific
+#       -----------------
+#	initrd_dmnames=name,name
+#		Logical names for dmsetup
+#
+# The following module lists are used files at /dev/modules:
+#	boot		boot time modules loaded but not removed.
+#	tuxonice	TuxOnIce modules.
+#	remdev		modules required to access removable media.
+#	pkcs11		modules required to access smartcard.
+#
+# Examples:
+#    loop-AES
+#	root=/dev/loop5 rootfstype=ext3 ro \
+#		video=radeonfb:1400x1050-32@60 acpi_sleep=s3_bios \
+#		splash=silent,fadein,theme:livecd-2006.0 quiet console=tty1 \
+#		initrd_encmode=loop-aes \
+#		initrd_util=gpgfile:/dev/sda1:ext2:/keys/swap.gpg,/keys/root.gpg \
+#		initrd_devices=/dev/hda2,/dev/hda3 initrd_loopstart=4 \
+#		initrd_suspend_mode=tuxonice resume=swap:/dev/loop4
+#
+#     DM-Crypt
+#	root=/dev/sda3 \
+#		video=radeonfb:1400x1050-32@60 acpi_sleep=s3_bios \
+#		splash=verbose,theme:livecd-2006.0 quiet console=tty1 \
+#		initrd_encmode=dm-crypt \
+#		initrd_util=gpgfile:/dev/sdb1:ext2:/keys/swap.gpg,/keys/root.gpg \
+#		initrd_devices=/dev/sda2,/dev/sda3 initrd_dmnames=swap,root
+#		initrd_suspend_mode=tuxonice resume=swap:/dev/mapper/swap 
+#
+# History
+# -----------------
+# 2008.05.06 - Alon Bar-Lev
+#	Added initrd_readers= parameters.
+#	People who used smartcards need to add initrd_readers=pcscd
+#	to keep their configuration working.
+# 2008.05.03 - Casper Biering
+#	Fix typo in keymap.
+# 2008.03.23 - Alon Bar-Lev
+#	Update to newer busybox that genkernel supports.
+# 2007.11.04 - Matyas Tibor
+#	gpg --log-file -> gpg --logger-file
+# 2007.11.03 - Alon Bar-Lev
+#	TuxOnIce changes.
+#	initrd_suspend_mode must be specified on command-line.
+# 2007.09.07 - Alon Bar-Lev
+#	Added resume= parameter support.
+#	Make resume device and splash aware.
+# 2007.08.17 - Alon Bar-Lev
+#	splashutils-0.5 required.
+# 2007.07.14 - Alon Bar-Lev
+#	Add uswsusp support.
+# 2007.06.04 - Alon Bar-Lev
+#	Fixup newroot issue.
+#	Fixup initrd_shell to have rescue, install, repair.
+# 2007.05.06 - Alon Bar-Lev
+#	Support a configuration without legacy sysfs
+# 2006.10.19 - Federico Zagarzazú, Alon Bar-Lev
+#	Added support for dm-crupt
+#	Added support for simple files for storing key
+#	Switched to busybox's switch_root
+# 2006.10.10 - Alon Bar-Lev
+#	Fixed gpg handling, many thanks to Pat Double for doing the tests.
+# 2006.09.29 - Alon Bar-Lev
+#	Merged some of Federico work.
+#	Modified format for initrd_util gpgfile, added fstype.
+# 2006.09.07 - Federico Zagarzazú
+# 	Initial support for dm-crypt (via cryptsetup(luks))
+#	Some style changes.
+#	Added support to load kmap and font.
+#	Added f_echo for fancy init messages.
+#	Support verbose splash at bootup.
+# 2006.08.25 - Alon Bar-Lev
+#	Switched udev into busybox mdev.
+#	Moved PKCS#11 application and label into command line.
+#	As recommended from Jari Ruusu a seperate key is required for each loop.
+# 2006.05.07 - Alon Bar-Lev
+#	Added cipher local option.
+#	Removed writing the key into memory file.
+# 2006.05.01 - Alon Bar-Lev
+#	Added gpg static passphrase option.
+# 2006.04.30 - Alon Bar-Lev
+#	Allow linuxrc.local to supply defaults.
+# 2006.04.27 - Alon Bar-Lev
+#	Change initrd_util parameter:
+#		pkcs11
+#		gpgfile:device:file
+#	Support for wait for util device if gpgfile.
+#	No need to have stty anymore since gpg does it for us.
+# 2006.02.01 - Alon Bar-Lev
+#	Support of disabling selected stages.
+# 2006.01.24 - Alon Bar-Lev
+#	Move to fbsplashds in daemon mode,
+#	since none-daemon mode does not paint splash currectly.
+# 2005.11.24 - Alon Bar-Lev
+#	Added udev support.
+#	Added PKCS#11 support.
+# 2005.06.07 - Alon Bar-Lev
+#	Written template from gentoo.org.
+#
+
+# don't edit
+global_splash_verbose=0
+global_mdev_active=0
+
+# colors
+color_black='\x1b[30;01m'
+color_red='\x1b[31;01m'
+color_green='\x1b[32;01m'
+color_yellow='\x1b[33;01m'
+color_blue='\x1b[34;01m'
+color_off='\x1b[0;0m'
+
+#
+# The following variables can(and should) be
+# overidden by cryptfs
+#
+
+# General 
+cfg_setup_initramfs=1		# Setup initramfs enviroment.
+cfg_install_applets=1		# Install busybox applets at runtime(creates symlinks for all applets
+				# that are compiled into busybox).
+cfg_start_mdev=1		# Start mdev(Busybox's mini-udev implementation)
+cfg_shell_checkpoint=0		# Shell checkpoint (initrd_shell)
+cfg_tmp_keys_rep=/tmp/keys	# Where keys are temporary stored
+cfg_tmp_keys_stat=/tmp/keys	# Where keys status stored
+cfg_kmap=			# Load kmap (initrd_kmap)
+cfg_font=			# Load font (initrd_kmap)
+cfg_init=/sbin/init		# Init to execute from root device
+cfg_newroot=/newroot		# Mountpoint for root
+cfg_remmnt=/mnt			# Mountpoint for removable device
+cfg_root_device=		# Root device (root)
+cfg_root_mode=ro		# Root mount mode (ro)
+cfg_root_type=			# Root filesystem type (rootfstype)
+cfg_resume_device=		# Resume device.
+cfg_hand_root_control=1		# Execute init from root device
+cfg_util_type=			# Type of utility (gpgfile,pkcs11,passphrase,keyfile) (initrd_util)
+cfg_remdev=			# Device assigned to removable media for gpgfile utility. (initrd_util=gpgfile)
+cfg_remdev_fs=			# Device assigned to removable media for gpgfile utility. (initrd_util=gpgfile)
+cfg_gpg_files=			# Files, one for each loop/device, comma separated (initrd_util=gpgfile)
+cfg_gpg_pass=			# Static passphrase (initrd_util=gpgfile)
+cfg_pkcs11_application=		# PKCS#11 data object application name (initrd_util=pkcs11)
+cfg_pkcs11_labels=		# PKCS#11 data object labels, one for each loop, (initrd_util=pkcs11)
+cfg_pkcs11_pass=	 	# PKCS#11 PIN (initrd_util=pkcs11)
+cfg_passphrase_id=		# Passphrase comma separated ides (initrd_util=passphrase)
+cfg_devices=			# Devices to decrypt (initrd_devices)
+cfg_suspend_mode=		# Type of suspend/resume to use
+cfg_resume_ui=auto		# Type of ui for resume
+
+# loop-AES
+cfg_loopaes=0			# 1 == loopAES support enabled (initrd_encmode=loop-aes)
+cfg_loopstart=0			# Loop start index (initrd_loopstart)
+cfg_cipher="AES256"             # Encryption cipher
+
+# dm-crypt
+cfg_dmcrypt=0			# 1 == dm-crypt support enabled (initrd_encmode=dm-crypt)
+cfg_dmnames=			# Logical names of DM crypt
+cfg_keyfile_files=		# Files(keyfiles), one for each device, comma separated (initrd_util=keyfile)
+
+# readers
+cfg_openct=0			# Enable openct
+cfg_pcscd=0			# Enable pcscd
+
+if [ -e /linuxrc.local ]; then
+	. /linuxrc.local
+fi
+
+f_parse_head() {
+	local s="${1}"
+	local d="${2}"
+
+	echo "${s%%${d}*}"
+}
+
+f_parse_remove_head() {
+	local s="${1}"
+	local d="${2}"
+	
+	local r="${s#*${d}}"
+	if [ "${r}" = "${s}" ]; then
+		echo ""
+	else
+		echo "${r}"
+	fi
+}
+
+f_echo() {
+	local type="${1}"
+	local msg="${2}"
+	local opts="${3}"
+	local eopts
+	local colors_on
+	local colors_off
+
+	if [ "${cfg_color_msg}" != 0 ]; then
+		colors_off="${color_off}"
+
+		case "${type}" in
+			err)
+				colors_on="${color_red}"
+			;;
+			inf)
+				colors_on="${color_yellow}"
+			;;
+			msg|*)
+				colors_on="${color_green}"
+			;;
+		esac
+
+		local o
+		for o in $(echo "${opts}" | sed 's/,/ /'); do
+			case "${o}" in
+				nonl)
+					eopts="$eopts -n"
+				;;
+			esac
+		done
+	fi
+
+	echo ${eopts} -e " ${colors_on}*${color_off} ${msg}"
+}
+
+f_modprobe_group() {
+	local group="${1}"
+
+	# Add -k on >=busybox-1.8
+	[ -f "/etc/modules/${group}" ] && cat "/etc/modules/${group}" | xargs -n1 modprobe > /dev/null 2>&1
+}
+
+f_rmmod_group() {
+	local group="${1}"
+
+	# use modprobe -r on >=busybox-1.8
+	[ -f "/etc/modules/${group}" ] && cat "/etc/modules/${group}" | xargs -n1 rmmod > /dev/null 2>&1
+	rmmod -a
+}
+
+f_killallwait() {
+	local p="${1}"
+
+	while killall -q -3 "${p}"; do
+		sleep 1
+	done
+}
+
+f_die() {
+	local message="${1}"
+
+	f_splash_verbose
+
+	f_echo err "${message}"
+	exec /bin/sh
+}
+
+f_shell_checkpoint() {
+	local level="${1}"
+
+	if [ "${cfg_shell_checkpoint}" = "${level}" ]; then
+		f_splash_verbose
+		exec /bin/sh
+	fi
+}
+
+f_splash_verbose() {
+	[ "${global_splash_verbose}" = 0 ] && chvt 1
+}
+
+f_splash_silent() {
+	[ "${global_splash_verbose}" = 0 ] && chvt 2
+}
+
+f_splash_message() {
+	local msg="${1}"
+	[ "${global_splash_verbose}" = 0 ] && BOOT_MSG="${msg}" fbcondecor_helper 2 'repaint'
+}
+
+f_loadkmap() {
+	if [ -n "${cfg_kmap}" ]; then
+		if [ -e "${cfg_kmap}" ]; then
+			loadkmap < "${cfg_kmap}"
+		else
+			f_die "Error: keymap \"${cfg_kmap}\" does not exist."
+		fi
+	fi
+	if [ -n "${cfg_font}" ]; then
+		if [ -e "${cfg_font}" ]; then
+			loadfont < "${cfg_font}"
+		else
+			f_die "Error: font \"${cfg_font}\" does not exist."
+		fi
+	fi
+}
+
+f_hand_root_control() {
+	[ -d "${cfg_newroot}" ] || mkdir "${cfg_newroot}"
+
+	mount -o "${cfg_root_mode}" ${cfg_root_type:+-t "${cfg_root_type}"} \
+		"${cfg_root_device}" "${cfg_newroot}" || f_die "Cannot mount root filesystem"
+
+	f_stop_mdev
+	umount /proc
+	umount /sys
+
+	exec switch_root -c "/dev/console" "${cfg_newroot}" "${cfg_init}" ${init_arg}
+}
+
+f_setup_mdev() {
+	if [ -x /sbin/mdev ]; then
+		/sbin/mdev -s
+		echo /sbin/mdev > /proc/sys/kernel/hotplug
+		global_mdev_active=1
+	fi
+}
+
+f_stop_mdev() {
+	if [ ${global_mdev_active} != 0 ]; then
+		echo > /proc/sys/kernel/hotplug
+	fi
+}
+
+f_reset_environment() {
+	export PATH="${OLDPATH}"
+}
+
+f_mount_remdev() {
+	f_modprobe_group "remdev"
+	
+	f_shell_checkpoint 302
+	local first_time=1
+	while ! mount -n -o ro ${cfg_remdev_fs:+-t "${cfg_remdev_fs}"} "${cfg_remdev}" "${cfg_remmnt}" > /dev/null 2>&1; do
+		if [ ${first_time} != 0 ]; then
+			f_echo inf "Please insert removable device ${cfg_remdev}..."
+			first_time=0
+		fi
+		sleep 2
+	done
+	f_shell_checkpoint 303
+}
+
+f_umount_remdev() {
+	umount -n "${cfg_remmnt}"
+	f_rmmod_group "remdev"
+}
+
+f_resume_uswsusp() {
+	local args
+	local features="$(resume --version | grep FEATURES)"
+	[ -n "${cfg_resume_device}" ] && args="${args} --resume_device=${cfg_resume_device}"
+	echo "${features}" | grep fbsplash > /dev/null && [ -n "${splash_theme}" -a "${global_splash_verbose}" = 0 ] && [ "${cfg_resume_ui}" = "auto" -o "${cfg_resume_ui}" = "fbsplash" ] && args="${args} --parameter=\"splash=y\""
+	eval resume ${args}
+}
+
+f_resume_tuxonice() {
+	local tuxonice_userui_program="/sys/power/tuxonice/user_interface/program"
+	local tuxonice_do_resume="/sys/power/tuxonice/do_resume"
+	local tuxonice_resume="/sys/power/tuxonice/resume"
+
+	#
+	# Backward compatibility
+	#
+	if [ -e /proc/suspend2 ]; then
+		tuxonice_userui_program="/sys/power/suspend2/user_interface/program"
+		tuxonice_do_resume="/sys/power/suspend2/do_resume"
+		tuxonice_resume="/sys/power/suspend2/resume2"
+	elif [ -e /proc/suspend2 ]; then
+		tuxonice_userui_program="/proc/suspend2/userui_program"
+		tuxonice_do_resume="/proc/suspend2/do_resume"
+		tuxonice_resume="/proc/suspend2/resume2"
+	fi
+
+	f_modprobe_group "tuxonice"
+	[ -n "${splash_theme}" ] && ln -s "/etc/splash/${splash_theme}" /etc/splash/suspend2
+	if [ "${cfg_resume_ui}" != "none" -a "${global_splash_verbose}" = 0 ]; then
+		if [ "${cfg_resume_ui}" = "auto" ]; then
+			if [ -z "${splash_theme}" ]; then
+				if which "suspend2ui_text" > /dev/null 2>&1; then
+					which "suspend2ui_text" > "${tuxonice_userui_program}"
+				fi
+				if which "tuxonice_text" > /dev/null 2>&1; then
+					which "tuxonice_text" > "${tuxonice_userui_program}"
+				fi
+			else
+				if which "suspend2ui_fbsplash" > /dev/null 2>&1; then
+					which "suspend2ui_fbsplash" > "${tuxonice_userui_program}"
+				fi
+				if which "tuxonice_fbsplash" > /dev/null 2>&1; then
+					which "tuxonice_fbsplash" > "${tuxonice_userui_program}"
+				fi
+			fi
+		else
+			if which "suspend2ui_${cfg_resume_ui}"; > /dev/null 2>&1; then
+				which "suspend2ui_${cfg_resume_ui}" > "${tuxonice_userui_program}"
+			fi
+			if which "tuxonice_${cfg_resume_ui}"; > /dev/null 2>&1; then
+				which "tuxonice_${cfg_resume_ui}" > "${tuxonice_userui_program}"
+			fi
+		fi
+	fi
+	[ -n "${cfg_resume_device}" ] && echo "${cfg_resume_device}" > "${tuxonice_resume}"
+	echo > "${tuxonice_do_resume}"
+	f_rmmod_group tuxonice
+}
+
+f_resume() {
+	case "${cfg_suspend_mode}" in
+		tuxonice)	f_resume_tuxonice;;
+		uswsusp)	f_resume_uswsusp;;
+	esac
+}
+
+f_keys_read_pkcs11() {
+
+	f_shell_checkpoint 101
+	f_modprobe_group "pkcs11"
+	if [ "${cfg_pcscd}" != "0" ]; then
+		mount -n -t usbfs usbfs /proc/bus/usb
+		sleep 3	# usbfs takes time
+		pcscd --force-reader-polling
+	fi
+	if [ "${cfg_openct}" != "0" ]; then
+		mkdir -p /var/run/openct
+		openct-control init
+	fi
+	f_shell_checkpoint 102
+
+	local labels="${cfg_pkcs11_labels}"
+	local index=0
+	local pkcs11_objects
+	while [ -n "${labels}" ]; do
+		local label
+
+		label=$(f_parse_head "${labels}" ",")
+		labels=$(f_parse_remove_head "${labels}" ",")
+
+		pkcs11_objects="${pkcs11_objects} \"--application=${cfg_pkcs11_application}\" \"--label=${label}\" \"--file=${cfg_tmp_keys_rep}/${index}.raw\""
+
+		index=$((${index}+1))
+	done
+
+	while ! eval pkcs11-data $(cat /etc/pkcs11.conf) --cmd=export ${pkcs11_objects}; do
+		f_echo msg "Please try again."
+	done
+
+	local key
+	for key in "${cfg_tmp_keys_rep}"/*; do
+		gunzip -c "${key}" > $(echo ${key} | sed 's/.raw//').key
+	done
+
+	f_shell_checkpoint 103
+	if [ "${cfg_pcscd}" != "0" ]; then
+		f_killallwait pcscd
+		while ! umount -n /proc/bus/usb > /dev/null 2>&1; do
+			sleep 1
+		done
+	fi
+	if [ "${cfg_openct}" != "0" ]; then
+		openct-control shutdown > /dev/null
+	fi
+	f_shell_checkpoint 104
+	f_rmmod_group "pkcs11"
+	f_shell_checkpoint 105
+}
+
+f_keys_read_gpg() {
+
+	local index=0
+	local bad_pass=1
+	while [ ${bad_pass} != 0 ]; do
+		if [ -z "${cfg_gpg_pass}" ]; then
+			stty -echo
+			echo -n "Passphrase: "
+			read cfg_gpg_pass
+			echo
+			stty echo
+		fi
+		bad_pass=0
+
+		local file
+		for file in $(echo "${cfg_gpg_files}" | sed 's/,/ /g'); do
+			if ! [ -f "${cfg_remmnt}/${file}" ]; then
+				f_die "Cannot access ${cfg_remdev}:${file}"
+			fi
+
+			if ! echo "${cfg_gpg_pass}" | \
+				gpg --homedir / \
+					--batch \
+					--logger-file /dev/null \
+					--passphrase-fd 0 \
+					--decrypt "${cfg_remmnt}/${file}" > \
+			 		"${cfg_tmp_keys_rep}/${index}.key"; then
+
+				bad_pass=1
+			else
+				index=$((${index}+1))
+			fi
+		done
+
+		unset cfg_gpg_pass
+
+		if [ ${bad_pass} != 0 ]; then
+			echo "Please try again." >&2
+		fi
+	done
+}
+
+f_keys_read_keyfile() {
+	local index=0 file
+	for file in $(echo "${cfg_keyfile_files}" | sed 's/,/ /g'); do
+		if ! [ -f "${cfg_remmnt}/${file}" ]; then
+			f_die "Cannot access ${cfg_remdev}:${file}"
+		else
+			cp "${cfg_remmnt}/${file}" "${cfg_tmp_keys_rep}/${index}.key"
+		fi
+		index=$((${index}+1))
+	done
+}
+
+f_keys_read_passphrase() {
+	local first_time=0
+	local index=0
+	local id
+
+	#
+	# If no rejects assume first time
+	#
+	[ "$(find "${cfg_tmp_keys_stat}")" = "${cfg_tmp_keys_stat}" ] && first_time=1
+
+	for id in $(echo "${cfg_passphrase_id}" | sed 's/,/ /g'); do
+
+		#
+		# If first time or rejected
+		#
+		if [ "${first_time}" != 0 -o -f "${cfg_tmp_keys_stat}/${index}.rejected" ]; then
+			
+			rm -f "${cfg_tmp_keys_stat}/${index}.rejected" > /dev/null 2>&1
+
+			if [ -f "${cfg_tmp_keys_rep}/passphrase_${id}" ]; then
+				cp "${cfg_tmp_keys_rep}/passphrase_${id}" "${cfg_tmp_keys_rep}/${index}.key"
+			else
+				local password
+
+				stty -echo
+				echo -n "Passphrase (${id}): "
+				read password
+				echo
+				stty echo
+
+				echo "${password}" > "${cfg_tmp_keys_rep}/${index}.key"
+				echo "${password}" > "${cfg_tmp_keys_rep}/passphrase_${id}"
+			fi
+		fi
+
+		index=$((${index}+1))
+	done
+}
+
+f_keys_clean() {
+	if [ -d "${cfg_tmp_keys_rep}" ]; then
+		local i
+		for i in "${cfg_tmp_keys_rep}"/*; do
+			dd if=/dev/zero "of=${i}" conv=notrunc bs=1024 count=10 > /dev/null 2>&1
+		done
+		rm -fr "${cfg_tmp_keys_rep}"
+	fi
+}
+
+f_keys_read() {
+
+	[ -d "${cfg_tmp_keys_rep}" ] || mkdir -p "${cfg_tmp_keys_rep}"
+	[ -d "${cfg_tmp_keys_stat}" ] || mkdir -p "${cfg_tmp_keys_stat}"
+
+	f_shell_checkpoint 201
+
+	case "${cfg_util_type}" in
+		pkcs11)
+			f_keys_read_pkcs11
+		;;
+		gpgfile)
+			f_mount_remdev
+			f_keys_read_gpg
+			f_umount_remdev
+		;;
+		passphrase)
+			f_keys_read_passphrase
+		;;
+		keyfile)
+			f_mount_remdev
+			f_keys_read_keyfile
+			f_umount_remdev
+		;;
+	esac
+
+	f_shell_checkpoint 202
+}
+
+f_opendevices_loopaes() {
+	local error=0
+
+	#
+	# map loop devices
+	#
+	local index=0
+	local device
+	for device in $(echo "${cfg_devices}" | sed 's/,/ /g'); do
+		local keyfile="${cfg_tmp_keys_rep}/${index}.key"
+
+		if [ -f "${keyfile}" ]; then
+			if ! losetup.crypt -p 0 -e "${cfg_cipher}" \
+				"/dev/loop$((${cfg_loopstart}+${index}))" \
+				"${device}" < "${keyfile}"; then
+
+				touch "${cfg_tmp_keys_stat}/${index}.rejected"
+				f_echo err "Cannot loop ${device}"
+				error=1
+			fi
+		fi
+
+		index="$((${index}+1))"
+	done
+
+	return "${error}"
+}
+
+f_opendevices_dmcrypt() {
+	local error=0
+
+	#
+	# map loop devices
+	#
+	local index=0
+	local names="${cfg_dmnames}"
+	local device
+	for device in $(echo "${cfg_devices}" | sed 's/,/ /g'); do
+
+		local name=$(f_parse_head "${names}" ",")
+		names=$(f_parse_remove_head "${names}" ",")
+		[ "${device}" == "${cfg_root_device}" ] && cfg_root_device="/dev/mapper/${name}"
+
+		local keyfile="${cfg_tmp_keys_rep}/${index}.key"
+
+		if [ -f "${keyfile}" ]; then
+
+			f_echo msg "Opening ${name}..."
+
+			local gen_prm
+			if cryptsetup isLuks "${device}" > /dev/null 2>&1; then
+				gen_prm="luksOpen \"${device}\" \"${name}\""
+			else
+				gen_prm="create \"${name}\" \"${device}\""
+			fi
+
+			local stdin_file
+			local key_prm
+			if [ "${cfg_util_type}" = "passphrase" ]; then
+				stdin_file="${keyfile}"
+				key_prm=""
+			else
+				stdin_file="/dev/null"
+				key_prm="-d \"${keyfile}\""
+			fi
+
+			if ! eval cryptsetup ${key_prm} ${gen_prm} < "${stdin_file}"; then
+				touch "${cfg_tmp_keys_stat}/${index}.rejected"
+				f_echo err "Failed to decrypt ${device}"
+				error=1
+			fi
+		fi
+
+		index="$((${index}+1))"
+	done
+
+	return "${error}"
+}
+
+f_opendevices() {
+	local error=0
+
+	if [ "${cfg_dmcrypt}" != 0 ]; then
+		f_opendevices_dmcrypt || error=1
+	elif [ "${cfg_loopaes}" != 0 ]; then
+		f_opendevices_loopaes || error=1
+	fi
+
+	return "${error}"
+}
+
+f_setup_initramfs() {
+	umask 0077
+
+	#
+	# basic mounts
+	#
+	if ! [ -f /proc/cmdline ]; then
+		mount -t proc none /proc
+	fi
+	mount -t sysfs /sys /sys
+	mount -o remount,rw /
+
+	#
+	# create utilities
+	#
+	if [ "${cfg_install_applets}" != 0 ]; then
+		/bin/busybox --install -s
+	fi
+
+	[ "$0" != "/init" ] && f_die "initrd is not supported"
+	[ -e /linuxrc -a "$0" = "/init" ] && rm /linuxrc
+
+	[ ! -d /tmp ] && mkdir /tmp
+	[ ! -d /var/run ] && mkdir -p /var/run
+	[ ! -d "${cfg_remmnt}" ] && mkdir -p "${cfg_remmnt}" 
+
+	[ -e /dev/tty ] && rm /dev/tty
+	[ -e /dev/tty0 ] && rm /dev/tty0
+	ln -s "$(tty)" /dev/tty
+	ln -s "$(tty)" /dev/tty0
+}
+
+f_setup_environment() {
+	#
+	# setup path
+	#
+	OLDPATH="${PATH}"
+	export PATH="${PATH}:/sbin:/bin:/usr/sbin:/usr/bin"
+
+	#
+	# parse command line
+	#
+	local x
+	for x in $(cat /proc/cmdline); do
+		local v="${x#*=}"
+		case "${x}" in
+			initrd_suspend_mode=*)
+				cfg_suspend_mode="${v}"
+			;;
+			initrd_util=*)
+				local t
+				t=$(f_parse_head "${v}" ":")
+				v=$(f_parse_remove_head "${v}" ":")
+				[ -n "${t}" ] && cfg_util_type="${t}"
+
+				case "${cfg_util_type}" in
+					"");;
+					pkcs11)
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_pkcs11_application="${t}"
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_pkcs11_labels="${t}"
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_pkcs11_pass="${t}"
+					;;
+					gpgfile)
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_remdev="${t}"
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_remdev_fs="${t}"
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_gpg_files="${t}"
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_gpg_pass="${t}"
+					;;
+					passphrase)
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_passphrase_id="${t}"
+					;;
+					keyfile)
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_remdev="${t}"
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_remdev_fs="${t}"
+						t=$(f_parse_head "${v}" ":")
+						v=$(f_parse_remove_head "${v}" ":")
+						[ -n "${t}" ] && cfg_keyfile_files="${t}"
+					;;
+					*)
+						f_die "Error: Invalid util argument ${v}"
+					;;
+				esac
+			;;
+			initrd_devices=*)
+				cfg_devices="${v}"
+			;;
+			initrd_loopstart=*)
+				cfg_loopstart="${v}"
+			;;
+			initrd_dmnames=*)
+				cfg_dmnames="${v}"
+			;;
+			initrd_shell=*)
+				case "${v}" in
+					rescue)		v=3;;
+					install)	v=5;;
+					repair)		v=10;;
+				esac
+				cfg_shell_checkpoint="${v}"
+			;;
+			initrd_kmap=*)
+				cfg_kmap=$(f_parse_head "${v}" ":")
+				local m=$(f_parse_remove_head "${v}" ":")
+				[ -n "${m}" ] && cfg_font="${m}"
+			;;
+			initrd_encmode=*)
+				case "${v}" in
+					loopaes)	cfg_loopaes=1;;
+					loop-aes)	cfg_loopaes=1;;
+					dmcrypt)	cfg_dmcrypt=1;;
+					dm-crypt)	cfg_dmcrypt=1;;
+				esac
+			;;
+			initrd_resume_ui)
+				cfg_resume_ui="${v}"
+			;;
+			initrd_readers=*)
+				echo "${v}" | grep "pcscd" > /dev/null && cfg_pcscd=1
+				echo "${v}" | grep "openct" > /dev/null && cfg_openct=1
+			;;
+			splash=*)
+				splash_theme=$(echo "${x}" | sed 's/.*theme://' | sed 's/,.*//')
+				[ -n "$(echo ${x} | grep verbose)" ] && global_splash_verbose=1
+			;;
+			root=*)
+				cfg_root_device="${v}"
+			;;
+			rootfstype=*)
+				cfg_root_type="${v}"
+			;;
+			ro)
+				cfg_root_mode=ro
+			;;
+			resume=*)
+				cfg_resume_device="${v}"
+			;;
+			[0123456Ss])
+				init_arg="${x}"
+			;;
+		esac
+	done
+}
+
+main() {
+	[ ${cfg_setup_initramfs} != 0 ] && f_setup_initramfs
+
+	f_setup_environment
+	f_shell_checkpoint 1
+	f_modprobe_group "boot"
+	f_shell_checkpoint 2
+	[ ${cfg_start_mdev} != 0 ] && f_setup_mdev
+	f_loadkmap
+	f_shell_checkpoint 3	# rescue point
+
+	if [ -z "${cfg_root_device}" ]; then
+		f_die "Error: Please specify root kernel parameter at next reboot."
+	fi
+	if [ -z "${cfg_util_type}" -a -n "${cfg_devices}" ]; then
+		f_die "Error: Please specify initrd_util kernel parameter at next reboot."
+	fi
+
+	if [ "${cfg_dmcrypt}" != 0 ]; then
+		if [ -e "/dev/device-mapper" -a ! -e "/dev/mapper/control" ]; then
+			[ -d /dev/mapper ] || mkdir /dev/mapper
+			ln -s /dev/device-mapper /dev/mapper/control
+		fi
+	fi
+
+	f_shell_checkpoint 5	# install point
+	if [ -n "${cfg_devices}" ]; then
+		local success="0"
+
+		while [ "${success}" = 0 ]; do
+			f_shell_checkpoint 6
+			f_splash_verbose
+			f_shell_checkpoint 7
+			f_keys_read
+			f_splash_silent
+			f_shell_checkpoint 8
+			f_opendevices && success="1"
+			f_shell_checkpoint 9
+			f_keys_clean
+
+			if [ "${cfg_util_type}" != "passphrase" -a "${success}" = 0 ]; then
+				f_die "Cannot open/decrypt devices"
+			fi
+		done
+	fi
+
+	f_shell_checkpoint 10	# repair point
+	f_splash_message "Trying to resume..."
+	f_shell_checkpoint 11
+	f_resume
+	f_shell_checkpoint 12
+	f_splash_message "Booting the system..."
+	f_shell_checkpoint 13
+	f_reset_environment
+	f_shell_checkpoint 14
+	[ ${cfg_hand_root_control} != 0 ] && f_hand_root_control
+	f_shell_checkpoint 15
+}
+
+main
+

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Copyright 2005-2006 Alon Bar-Lev <alon.barlev@gmail.com>
+# Distributed under the terms of the GNU General Public License v2
+
+die() {
+	local msg="$1"
+
+	echo "${msg}" >&2
+	exit 1
+}
+
+if [ "${mygen_modules}" != "0" ]; then
+	if ! [ -z "${mygen_emerge_ramdisk_modules_s0_oneshot}" ] && ! "${mygen_emerge}" ${mygen_emerge_prm} -1 ${mygen_emerge_ramdisk_modules_s0_oneshot}; then
+		die "${mygen_emerge} failed s0_oneshot!"
+	fi
+	if ! [ -z "${mygen_emerge_ramdisk_modules_s0}" ] && ! "${mygen_emerge}" ${mygen_emerge_prm} ${mygen_emerge_ramdisk_modules_s0}; then
+		die "${mygen_emerge} failed s0!"
+	fi
+	if ! [ -z "${mygen_emerge_ramdisk_modules_s1_oneshot}" ] && ! "${mygen_emerge}" ${mygen_emerge_prm} -1 ${mygen_emerge_ramdisk_modules_s1_oneshot}; then
+		die "${mygen_emerge} failed s1_oneshot!"
+	fi
+	if ! [ -z "${mygen_emerge_ramdisk_modules_s1}" ] && ! "${mygen_emerge}" ${mygen_emerge_prm} ${mygen_emerge_ramdisk_modules_s1}; then
+		die "${mygen_emerge} failed s1!"
+	fi
+fi
+
+if [ -d "${mygen_temp}/initramfs" ]; then
+	rm -fr "${mygen_temp}/initramfs"
+fi
+
+mkdir "${mygen_temp}/initramfs"
+
+if ! "${mygen_bootfiles}/${mygen_kernel_fqn}/create-initramfs" "${mygen_arch}" "${mygen_temp}/initramfs"; then
+	die "create-initramfs failed!"
+fi
+
+exit 0

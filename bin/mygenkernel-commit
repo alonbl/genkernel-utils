@@ -1,0 +1,13 @@
+#!/bin/sh
+# Copyright 2005-2006 Alon Bar-Lev <alon.barlev@gmail.com>
+# Distributed under the terms of the GNU General Public License v2
+
+. /etc/mygenkernel.conf
+
+sed -r "s/(CONFIG_LOCALVERSION)=\"(.*)\"/\1=\"${mygen_suffix_stable}\"/" /etc/kernels/kernel-config-${mygen_arch}-${mygen_kernel}${mygen_suffix_nonestable} > /etc/kernels/kernel-config-${mygen_arch}-${mygen_kernel}${mygen_suffix_stable}
+
+rm -fr "${mygen_bootfiles}/${mygen_kernel}${mygen_suffix_stable}"
+cp -a "${mygen_bootfiles}/${mygen_kernel}${mygen_suffix_nonestable}" "${mygen_bootfiles}/${mygen_kernel}${mygen_suffix_stable}"
+
+mygenkernel --stable --modules
+mygenkernel --no-install --no-menuconfig --clean
