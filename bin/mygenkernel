@@ -102,6 +102,7 @@ if ! genkernel \
 	${mygen_splash_res:+--splash-res=${mygen_splash_res}} \
 	${clean} \
 	"--no-install" \
+	"--ramdisk-modules" \
 	"--kerneldir=${KERNEL_DIR}" \
 	"--kernel-config=${mygen_kernel_config}" \
 	"--callback=`dirname $0`/mygenkernel-ramdisk-presettings" \
