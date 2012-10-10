@@ -1,6 +1,6 @@
 #!/bin/sh
-#
-# Provided under GPLv2 license.
+# Copyright 2005-2011 Alon Bar-Lev <alon.barlev@gmail.com>
+# Distributed under the terms of the GNU General Public License v2
 #
 # The following standard kernel parameters are supported:
 #	root		root device
@@ -18,22 +18,21 @@
 #       initrd_encmode=<mode>
 #		<empty>
 #			No encryption.
-#		loop-aes
+#		loop-aes[:cipher]
 #			Enables loop-AES support.
 #		dm-crypt
 #			Enables DM-Crypt support.
 #	initrd_util
 #		pkcs11:application:label,label,label
 #			use PKCS#11 smartcards.
-#		gpgfile:device:fstype:file,file,file[:passphrase]
-#			use gnupg file located at device.
+#		gpgfile|aescrypt|keyfile:device:fstype:file,file,file[:passphrase]
+#			use gnupg or aes crypt file located at device.
 #			wait for device to be available.
+#			device can be 'none'
 #		passphrase:id,id,id			(dm-crypt)
 #			use passphrases read from the user, each
 #			id signify passphrase for a device, id
 #			may be the same.
-#		keyfile:device:fstype:file,file,file	(dm-crypt)
-#			use keyfile located at device.
 #	initrd_devices
 #		Devices for encryption setup.
 #	initrd_suspend_mode
@@ -88,6 +87,8 @@
 #
 # History
 # -----------------
+# 2012.10.10 - Alon Bar-Lev
+#	Added support for aescrypt as alternative of gpg
 # 2008.05.06 - Alon Bar-Lev
 #	Added initrd_readers= parameters.
 #	People who used smartcards need to add initrd_readers=pcscd
@@ -192,11 +193,11 @@ cfg_root_mode=ro		# Root mount mode (ro)
 cfg_root_type=			# Root filesystem type (rootfstype)
 cfg_resume_device=		# Resume device.
 cfg_hand_root_control=1		# Execute init from root device
-cfg_util_type=			# Type of utility (gpgfile,pkcs11,passphrase,keyfile) (initrd_util)
-cfg_remdev=			# Device assigned to removable media for gpgfile utility. (initrd_util=gpgfile)
-cfg_remdev_fs=			# Device assigned to removable media for gpgfile utility. (initrd_util=gpgfile)
-cfg_gpg_files=			# Files, one for each loop/device, comma separated (initrd_util=gpgfile)
-cfg_gpg_pass=			# Static passphrase (initrd_util=gpgfile)
+cfg_util_type=			# Type of utility (gpgfile,aescrypt,pkcs11,passphrase,keyfile) (initrd_util)
+cfg_remdev=			# Device assigned to removable media for gpgfile|aescrypt utility. (initrd_util=gpgfile|aescrypt)
+cfg_remdev_fs=			# Device assigned to removable media for gpgfile|aescrypt utility. (initrd_util=gpgfile|aescrypt)
+cfg_key_files=			# Files, one for each loop/device, comma separated (initrd_util=gpgfile|aescrypt)
+cfg_gpg_pass=			# Static passphrase (initrd_util=gpgfile|aescrypt)
 cfg_pkcs11_application=		# PKCS#11 data object application name (initrd_util=pkcs11)
 cfg_pkcs11_labels=		# PKCS#11 data object labels, one for each loop, (initrd_util=pkcs11)
 cfg_pkcs11_pass=	 	# PKCS#11 PIN (initrd_util=pkcs11)
@@ -381,9 +382,9 @@ f_reset_environment() {
 }
 
 f_mount_remdev() {
-	f_modprobe_group "remdev"
-	
 	f_shell_checkpoint 302
+	f_modprobe_group "remdev"
+
 	local first_time=1
 	while ! mount -n -o ro ${cfg_remdev_fs:+-t "${cfg_remdev_fs}"} "${cfg_remdev}" "${cfg_remmnt}" > /dev/null 2>&1; do
 		if [ ${first_time} != 0 ]; then
@@ -519,27 +520,64 @@ f_keys_read_pkcs11() {
 	f_shell_checkpoint 105
 }
 
-f_keys_read_gpg() {
+f_keys_read_aescrypt() {
 
 	local index=0
 	local bad_pass=1
 	while [ ${bad_pass} != 0 ]; do
-		if [ -z "${cfg_gpg_pass}" ]; then
+		if [ -z "${cfg_pass}" ]; then
 			stty -echo
 			echo -n "Passphrase: "
-			read cfg_gpg_pass
+			read cfg_pass
 			echo
 			stty echo
 		fi
 		bad_pass=0
 
 		local file
-		for file in $(echo "${cfg_gpg_files}" | sed 's/,/ /g'); do
+		for file in $(echo "${cfg_key_files}" | sed 's/,/ /g'); do
 			if ! [ -f "${cfg_remmnt}/${file}" ]; then
 				f_die "Cannot access ${cfg_remdev}:${file}"
 			fi
 
-			if ! echo "${cfg_gpg_pass}" | \
+			if ! aescrypt -d -p "${cfg_pass}" \
+				-o "${cfg_tmp_keys_rep}/${index}.key" \
+				"${cfg_remmnt}/${file}"; then
+				bad_pass=1
+			else
+				index=$((${index}+1))
+			fi
+		done
+
+		unset cfg_pass
+
+		if [ ${bad_pass} != 0 ]; then
+			echo "Please try again." >&2
+		fi
+	done
+}
+
+f_keys_read_gpg() {
+
+	local index=0
+	local bad_pass=1
+	while [ ${bad_pass} != 0 ]; do
+		if [ -z "${cfg_pass}" ]; then
+			stty -echo
+			echo -n "Passphrase: "
+			read cfg_pass
+			echo
+			stty echo
+		fi
+		bad_pass=0
+
+		local file
+		for file in $(echo "${cfg_key_files}" | sed 's/,/ /g'); do
+			if ! [ -f "${cfg_remmnt}/${file}" ]; then
+				f_die "Cannot access ${cfg_remdev}:${file}"
+			fi
+
+			if ! echo "${cfg_pass}" | \
 				gpg --homedir / \
 					--batch \
 					--logger-file /dev/null \
@@ -553,7 +591,7 @@ f_keys_read_gpg() {
 			fi
 		done
 
-		unset cfg_gpg_pass
+		unset cfg_pass
 
 		if [ ${bad_pass} != 0 ]; then
 			echo "Please try again." >&2
@@ -633,18 +671,17 @@ f_keys_read() {
 		pkcs11)
 			f_keys_read_pkcs11
 		;;
-		gpgfile)
+		gpgfile|aescrypt|keyfile)
 			f_mount_remdev
-			f_keys_read_gpg
+			case "${cfg_util_type}" in
+				gpgfile) f_keys_read_gpg ;;
+				aescrypt) f_keys_read_aescrypt ;;
+				keyfile) f_keys_read_keyfile ;;
+			esac
 			f_umount_remdev
 		;;
 		passphrase)
 			f_keys_read_passphrase
-		;;
-		keyfile)
-			f_mount_remdev
-			f_keys_read_keyfile
-			f_umount_remdev
 		;;
 	esac
 
@@ -810,7 +847,7 @@ f_setup_environment() {
 						v=$(f_parse_remove_head "${v}" ":")
 						[ -n "${t}" ] && cfg_pkcs11_pass="${t}"
 					;;
-					gpgfile)
+					gpgfile|aescrypt|keyfile)
 						t=$(f_parse_head "${v}" ":")
 						v=$(f_parse_remove_head "${v}" ":")
 						[ -n "${t}" ] && cfg_remdev="${t}"
@@ -819,7 +856,7 @@ f_setup_environment() {
 						[ -n "${t}" ] && cfg_remdev_fs="${t}"
 						t=$(f_parse_head "${v}" ":")
 						v=$(f_parse_remove_head "${v}" ":")
-						[ -n "${t}" ] && cfg_gpg_files="${t}"
+						[ -n "${t}" ] && cfg_key_files="${t}"
 						t=$(f_parse_head "${v}" ":")
 						v=$(f_parse_remove_head "${v}" ":")
 						[ -n "${t}" ] && cfg_gpg_pass="${t}"
@@ -828,17 +865,6 @@ f_setup_environment() {
 						t=$(f_parse_head "${v}" ":")
 						v=$(f_parse_remove_head "${v}" ":")
 						[ -n "${t}" ] && cfg_passphrase_id="${t}"
-					;;
-					keyfile)
-						t=$(f_parse_head "${v}" ":")
-						v=$(f_parse_remove_head "${v}" ":")
-						[ -n "${t}" ] && cfg_remdev="${t}"
-						t=$(f_parse_head "${v}" ":")
-						v=$(f_parse_remove_head "${v}" ":")
-						[ -n "${t}" ] && cfg_remdev_fs="${t}"
-						t=$(f_parse_head "${v}" ":")
-						v=$(f_parse_remove_head "${v}" ":")
-						[ -n "${t}" ] && cfg_keyfile_files="${t}"
 					;;
 					*)
 						f_die "Error: Invalid util argument ${v}"
@@ -869,8 +895,12 @@ f_setup_environment() {
 			;;
 			initrd_encmode=*)
 				case "${v}" in
-					loopaes)	cfg_loopaes=1;;
 					loop-aes)	cfg_loopaes=1;;
+					loop-aes:*)
+						cfg_loopaes=1
+						local c="${v#*:}"
+						cfg_cipher="${c}"
+						;;
 					dmcrypt)	cfg_dmcrypt=1;;
 					dm-crypt)	cfg_dmcrypt=1;;
 				esac

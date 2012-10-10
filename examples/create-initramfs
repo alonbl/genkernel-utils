@@ -6,6 +6,7 @@ die() {
 }
 
 USE_GNUPG=0
+USE_AESCRYPT=1
 USE_OPENCT=0
 USE_PCSCD=0
 USE_TUXONICE=0
@@ -14,7 +15,7 @@ USE_PKCS11=0
 USE_ASE_PKCS11=0
 USE_OPENSC_PKCS11=0
 USE_PKCS11_UTIL=0
-USE_LOOP_AES=0
+USE_LOOP_AES=1
 
 if [ $# != 2 ]; then
 	die "usage: $0 arch target-dir"
@@ -44,6 +45,10 @@ mkdir -p "${target}/usr/lib"
 if [ "${USE_LOOP_AES}" = 1 ]; then
 	cp -aL /usr/sbin/loop-aes-losetup.static "${target}/sbin/losetup.crypt" || die "losetup"
 	cp -aL /usr/bin/aespipe "${target}/usr/bin" || die "asepipe"
+fi
+
+if [ "${USE_AESCRYPT}" = 1 ]; then
+	cp -aL /usr/bin/aescrypt "${target}/usr/bin" || die "aescrypt"
 fi
 
 if [ "${USE_GNUPG}" = 1 ]; then
