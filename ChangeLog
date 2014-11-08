@@ -1,5 +1,6 @@
-????????
+20141108
 	- (alonbl) fix POSIX shell compatibility.
+	- (alonbl) Release 0.46
 
 20121010
 	- (alonbl) add aescrypt as alternative to gpg
