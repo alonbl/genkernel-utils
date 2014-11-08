@@ -124,7 +124,7 @@ boot_mounted=0
 if mount | grep "${mygen_boot}" > /dev/null; then
 	boot_mounted=1
 fi
-if [ "${boot_mounted}" == 0 ]; then
+if [ "${boot_mounted}" = 0 ]; then
 	if ! mount -o rw "${mygen_boot}"; then
 		die "cannot mount boot!"
 	fi
@@ -137,7 +137,7 @@ fi
 #
 # copy kernel
 #
-if [ "${no_install}" == 0 -a "${op}" != "ramdisk" ]; then
+if [ "${no_install}" = 0 -a "${op}" != "ramdisk" ]; then
 	touch /var/run/tuxonice-new-kernel
 	if ! cp "/var/tmp/genkernel/kernel-genkernel-${mygen_arch}-"* "${mygen_boot}/kernel-${mygen_arch}-${mygen_kernel_fqn}"; then
 		die "kernel copy failed!"
@@ -153,7 +153,7 @@ fi
 #
 # copy initramfs
 #
-if [ "${no_install}" == 0 ]; then
+if [ "${no_install}" = 0 ]; then
 	if ! cp "/var/tmp/genkernel/initramfs-"* "${mygen_boot}/initramfs-${mygen_arch}-${mygen_kernel_fqn}"; then
 		die "ramdisk copy failed!"
 	fi
@@ -165,7 +165,7 @@ fi
 
 mount -o remount,ro "${mygen_boot}"
 
-if [ "${boot_mounted}" == 0 ]; then
+if [ "${boot_mounted}" = 0 ]; then
 	umount "${mygen_boot}"
 fi
 
